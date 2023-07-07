@@ -1,3 +1,9 @@
+https://cloud.google.com/composer/docs/composer-2/triggering-with-gcf?hl=es-419
+
+https://cloud.google.com/composer/docs/composer-2/access-airflow-api?hl=es-419#enable-stable
+api       auth_backends                                 airflow.composer.api.backend.composer_auth
+api       composer_auth_user_registration_role          Op
+
 gcloud iam service-accounts describe \
   ronny-dev-airflow@appspot.gserviceaccount.com \
   --format="value(oauth2ClientId)"

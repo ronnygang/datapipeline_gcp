@@ -1,0 +1,2 @@
+Faker
+google-cloud-storage

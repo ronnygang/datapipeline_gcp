@@ -41,10 +41,10 @@ def trigger_dag_gcf(event, context):
     parts = file_name.split('_')[0]
     table_name = parts.split('/')[-1]
     object_name = file_name.split('.')[-1]
-    INSTANCE = 'https://6f5e4512a8324ac19b5b05192553bccf-dot-us-central1.composer.googleusercontent.com'
-    DAG_ID2 = f'load_{table_name}_{object_name}'
-    print(DAG_ID2)
-    DAG_ID = 'composer_sample_trigger_response_dag'
+    INSTANCE = 'https://783acb7571f14328adb7ebc713355964-dot-us-central1.composer.googleusercontent.com'
+    DAG_ID = f'load_{table_name}_{object_name}'
+    print(f'Executin dag_id: {DAG_ID}')
+    #DAG_ID = 'composer_sample_trigger_response_dag'
     DATA = {
         'conf': {}
     }
