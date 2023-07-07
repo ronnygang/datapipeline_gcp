@@ -1,0 +1,21 @@
+gcloud auth login
+
+gcloud config set project "ronny-dev-airflow"
+
+#Crear:
+    Dockerfile
+
+#Crear:
+    carpeta app
+	Crear main.py
+
+#Crear:
+    .dockerignore
+
+docker build -t gcr.io/ronny-dev-airflow/ronny-apis .
+
+docker push gcr.io/ronny-dev-airflow/ronny-apis
+
+gcloud auth configure-docker
+
+gcloud run deploy --image gcr.io/ronny-dev-airflow/ronny-apis --platform managed

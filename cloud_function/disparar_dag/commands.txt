@@ -1,0 +1,11 @@
+gcloud iam service-accounts describe \
+  ronny-dev-airflow@appspot.gserviceaccount.com \
+  --format="value(oauth2ClientId)"
+
+gcloud composer environments run  dev-ronny-composer-gcp \
+    --location us-central1\
+    users create -- \
+    -u accounts.google.com:106370440712596497081 \
+    -e tyrone \
+    -f tyrone \
+    -l - -r Op --use-random-password
