@@ -7,7 +7,7 @@ from google.cloud import storage
 from io import StringIO
 import json
 
-def create_campaigns(request):
+def create_transactions(request):
     request_json = request.get_json()
     if request_json and 'quantity' in request_json:
         quantity = request_json['quantity']
@@ -18,22 +18,22 @@ def create_campaigns(request):
     uuid_4dig = str(uuid.uuid4().hex)[:4]
 
     bucket_name = 'dev-ronny-datalake-raw'
-    destination_blob_name = f'results/campaigns_{date_str}_{uuid_4dig}.csv'
+    destination_blob_name = f'results/transactions_{date_str}_{uuid_4dig}.csv'
 
     fake = Faker()
     rows = []
 
     for _ in range(quantity):
-        campaign_id = fake.random_number(digits=8)
-        cost = round(random.uniform(10, 1000), 2)
-        country = fake.country()
+        transaction_id = fake.random_number(digits=10)
+        income = round(random.uniform(10, 1000), 2)
+        country = 'Peru'
         date_time = fake.date_time_between(start_date='-3h')
-        rows.append([campaign_id, cost, country, date_time.strftime('%Y-%m-%d %H:%M:%S')])
+        rows.append([transaction_id, income, country, date_time.strftime('%Y-%m-%d %H:%M:%S')])
 
     csv_stringio = StringIO()
 
     writer = csv.writer(csv_stringio)
-    writer.writerow(['campaign_id', 'cost', 'country', 'date_time'])
+    writer.writerow(['transaction_id', 'income', 'country', 'date_time'])
     writer.writerows(rows)
 
     storage_client = storage.Client()    

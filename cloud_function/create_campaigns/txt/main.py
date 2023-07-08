@@ -12,8 +12,7 @@ def create_campaigns(request):
     else:
         return json.dumps({"error": "Missing 'quantity'"}), 400
 
-    date = datetime.now()
-    date_str = date.strftime('%Y%m%d')
+    date_str = datetime.now().strftime('%Y%m%d')
 
     uuid_4dig = str(uuid.uuid4().hex)[:4]
 
@@ -27,8 +26,8 @@ def create_campaigns(request):
         campaign_id = fake.random_number(digits=8)
         cost = round(random.uniform(10, 1000), 2)
         country = fake.country()
-        date = fake.date_time_between(start_date='-3h')
-        line = f'{campaign_id}\t{cost}\t{country}\t{date}\n'
+        date_time = fake.date_time_between(start_date='-3h')
+        line = f'{campaign_id}\t{cost}\t{country}\t{date_time}\n'
         lines.append(line)
 
     text_content = ''.join(lines)
