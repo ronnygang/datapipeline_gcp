@@ -105,6 +105,9 @@ with DAG(
                 timeout = 15
             )
 
+            starting_loading_to_raw = DummyOperator(
+                task_id = 'starting_loading_to_raw'
+            )
 
             load_campaign = GoogleCloudStorageToBigQueryOperator(
                 task_id = "load_campaign",
@@ -153,7 +156,9 @@ with DAG(
                 }
             )
 
-            [campaigns_ingested_sensor, transactions_ingested_sensor] >> [load_campaign, load_transaction] >> smart_cleaner
+            [campaigns_ingested_sensor, transactions_ingested_sensor] >> starting_loading_to_raw 
+            
+            starting_loading_to_raw >> [load_campaign, load_transaction] >> smart_cleaner
         
         ingest_from_api_local >> load_to_bq_raw
 
