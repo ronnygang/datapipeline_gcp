@@ -33,10 +33,10 @@ TASK_ARGUMENTS = {
 }
 
 PATHS = {
-    'campaigns_csv': 'gs://dev-ronny-datalake-raw/ingested/campaigns_*.csv',
-    'transactions_csv': 'gs://dev-ronny-datalake-raw/ingested/transactions_*.csv',
-    'campaigns_txt': 'gs://dev-ronny-datalake-raw/ingested/campaigns_*.txt',
-    'transactions_txt': 'gs://dev-ronny-datalake-raw/ingested/transactions_*.txt',
+    'campaigns_csv': 'gs://dev-ronny-datalake-raw/ingested/csv/campaigns_*.csv',
+    'transactions_csv': 'gs://dev-ronny-datalake-raw/ingested/csv/transactions_*.csv',
+    'campaigns_txt': 'gs://dev-ronny-datalake-raw/ingested/txt/campaigns_*.txt',
+    'transactions_txt': 'gs://dev-ronny-datalake-raw/ingested/txt/transactions_*.txt',
     'loaded' : 'gs://dev-ronny-datalake-raw/loaded'
 }
 
@@ -92,7 +92,7 @@ with DAG(
             campaigns_ingested_sensor = GCSObjectsWithPrefixExistenceSensor(
                 task_id='campaigns_ingested_sensor',
                 bucket='dev-ronny-datalake-raw',
-                prefix='ingested/campaigns_{{ ds_nodash }}_',
+                prefix='ingested/csv/campaigns_{{ ds_nodash }}_',
                 google_cloud_conn_id='google_cloud_default',
                 timeout = 15
             )    
@@ -100,7 +100,7 @@ with DAG(
             transactions_ingested_sensor = GCSObjectsWithPrefixExistenceSensor(
                 task_id='transactions_ingested_sensor',
                 bucket='dev-ronny-datalake-raw',
-                prefix='ingested/transactions_{{ ds_nodash }}_',
+                prefix='ingested/csv/transactions_{{ ds_nodash }}_',
                 google_cloud_conn_id='google_cloud_default',
                 timeout = 15
             )
@@ -112,7 +112,7 @@ with DAG(
             load_campaign = GoogleCloudStorageToBigQueryOperator(
                 task_id = "load_campaign",
                 bucket = 'dev-ronny-datalake-raw',
-                source_objects = ['results/campaigns_*.csv'],    
+                source_objects = ['ingested/csv/campaigns_*.csv'],    
                 destination_project_dataset_table ='raw_layer.r_campaigns',
 
                 schema_fields=[
@@ -129,7 +129,7 @@ with DAG(
             load_transaction = GoogleCloudStorageToBigQueryOperator(
                 task_id = "load_transaction",
                 bucket = 'dev-ronny-datalake-raw',
-                source_objects = ['results/transactions_*.csv'],    
+                source_objects = ['ingested/csv/transactions_*.csv'],    
                 destination_project_dataset_table ='raw_layer.r_transactions',
 
                 schema_fields=[
