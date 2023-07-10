@@ -13,6 +13,7 @@ from airflow.providers.google.cloud.operators.dataproc import (
     DataprocSubmitJobOperator,
 )
 from airflow.contrib.operators.gcp_sql_operator import CloudSqlInstanceExportOperator
+from airflow.contrib.operators.bigquery_operator import BigQueryOperator
 
 from datetime import timedelta, datetime
 import logging
@@ -54,6 +55,7 @@ PATHS = {
     'transactions_csv': 'gs://dev-ronny-datalake-raw/ingested/local/transactions_*.csv',
     'campaigns_txt': 'gs://dev-ronny-datalake-raw/ingested/global/campaigns_*.txt',
     'transactions_txt': 'gs://dev-ronny-datalake-raw/ingested/global/transactions_*.txt',
+    'users_csv' : 'gs://dev-ronny-datalake-raw/ingested/cloud_sql/users_*.csv',
     'loaded_local' : 'gs://dev-ronny-datalake-raw/loaded/local',
     'loaded_global' : 'gs://dev-ronny-datalake-raw/loaded/global',
     'loaded_cloud_sql' : 'gs://dev-ronny-datalake-raw/loaded/cloud_sql',
@@ -90,6 +92,67 @@ EXPORT_BODY = {
     }
 }
 
+QUERY_MASTER = """
+    SELECT
+        c.campaign_id,
+        c.cost AS campaign_cost,
+        t.transaction_id,
+        t.income,
+        t.country AS transaction_country,
+        s.customer_id,
+        s.product_id,
+        s.quantity,
+        s.price,
+        s.category,
+        t.date_time AS transaction_datetime
+    FROM
+       raw_layer.r_campaigns AS c
+    JOIN
+        raw_layer.r_transactions AS t 
+        ON c.country = t.country 
+        AND c.date_time = t.date_time
+    JOIN
+        raw_layer.r_sales AS s 
+        ON t.transaction_id = s.transaction_id;
+"""
+
+QUERY_BUSINESS_PERFORMANCE_METRICS = """
+    SELECT
+        transaction_country AS country,
+        DATE(transaction_datetime) AS date,
+        COUNT(DISTINCT transaction_id) AS transaction_count,
+        SUM(income) AS total_income,
+        SUM(campaign_cost) AS total_campaign_cost,
+        AVG(income) AS average_income,
+        AVG(campaign_cost) AS average_campaign_cost,
+        SUM(income - campaign_cost) AS total_profit,
+        SUM(income) / COUNT(DISTINCT transaction_id) AS average_transaction_value
+    FROM
+        master_layer.m_data_model
+    GROUP BY
+        transaction_country,
+        DATE(transaction_datetime);
+"""
+
+QUERY_BUSINESS_PRODUCT_PERFORMANCE = """
+    SELECT
+        product_id,
+        transaction_country AS country,
+        DATE(transaction_datetime) AS date,
+        COUNT(DISTINCT transaction_id) AS transaction_count,
+        SUM(quantity) AS total_quantity,
+        SUM(income) AS total_income,
+        AVG(income) AS average_income,
+        SUM(income - campaign_cost) AS total_profit,
+        SUM(income) / COUNT(DISTINCT transaction_id) AS average_transaction_value
+    FROM
+        master_layer.m_data_model
+    GROUP BY
+        product_id,
+        transaction_country,
+        DATE(transaction_datetime);
+"""
+
 def make_curl_request(url):
     quantity = random.randint(500, 1000)
     url = f'{url}?quantity={quantity}'
@@ -111,7 +174,7 @@ with DAG(
     catchup = False,
     start_date = datetime(2023, 7, 1),
     schedule_interval = None,
-    tags = ['ingest', 'csv', 'bigquery']
+    tags = ['datapipeline', 'gcp']
 
 ) as dag:
     
@@ -192,8 +255,8 @@ with DAG(
                 write_disposition = 'WRITE_APPEND'
             )
 
-            smart_cleaner_csv = BashOperator(
-                task_id = 'smart_cleaner_csv',
+            smart_cleaner_local = BashOperator(
+                task_id = 'smart_cleaner_local',
                 bash_command = """
                     gsutil mv {{ params.path_campaigns }} {{ params.target }} && 
                     gsutil mv {{ params.path_transactions }} {{ params.target }}         
@@ -201,13 +264,13 @@ with DAG(
                 params = {
                     'path_campaigns': PATHS['campaigns_csv'],
                     'path_transactions': PATHS['transactions_csv'],
-                    'target': PATHS['loaded']
+                    'target': PATHS['loaded_local']
                 }
             )
 
             [campaigns_ingested_sensor, transactions_ingested_sensor] >> starting_loading_to_raw 
             
-            starting_loading_to_raw >> [load_campaign, load_transaction] >> smart_cleaner_csv
+            starting_loading_to_raw >> [load_campaign, load_transaction] >> smart_cleaner_local
         
         ingest_from_api_local >> load_raw_with_bq
 
@@ -268,8 +331,8 @@ with DAG(
                 region=REGION
             )
 
-            smart_cleaner_txt = BashOperator(
-                task_id = 'smart_cleaner_txt',
+            smart_cleaner_global = BashOperator(
+                task_id = 'smart_cleaner_global',
                 bash_command = """
                     gsutil mv {{ params.path_campaigns }} {{ params.target }} && 
                     gsutil mv {{ params.path_transactions }} {{ params.target }}         
@@ -277,50 +340,113 @@ with DAG(
                 params = {
                     'path_campaigns': PATHS['campaigns_txt'],
                     'path_transactions': PATHS['transactions_txt'],
-                    'target': PATHS['loaded']
+                    'target': PATHS['loaded_global']
                 }
             )
 
             [campaigns_ingested_sensor, transactions_ingested_sensor] >> create_cluster >> pyspark_task
 
-            pyspark_task >> delete_cluster >> smart_cleaner_txt
+            pyspark_task >> delete_cluster >> smart_cleaner_global
 
         ingest_from_api_global >> load_raw_with_spark
 
     with TaskGroup('database_sql') as database_sql:
         with TaskGroup('ingest_from_database_sql') as ingest_from_database_sql:
-            sql_export_task = CloudSqlInstanceExportOperator(
-                project_id=PROJECT_ID, 
-                body=EXPORT_BODY, 
-                instance=INSTANCE_NAME, 
-                task_id='sql_export_task'
+            sales_export_task = CloudSqlInstanceExportOperator(
+                task_id = 'sales_export_task',
+                project_id = PROJECT_ID, 
+                body = EXPORT_BODY, 
+                instance = INSTANCE_NAME                
             )
-            sql_export_task
+            sales_export_task
 
         with TaskGroup('load_raw_with_bq') as load_raw_with_bq:
-            users_ingested_sensor = GCSObjectsWithPrefixExistenceSensor(
-                task_id='campaigns_ingested_sensor',
+            sales_ingested_sensor = GCSObjectsWithPrefixExistenceSensor(
+                task_id='users_ingested_sensor',
                 bucket='dev-ronny-datalake-raw',
-                prefix='ingested/cloud_sql/users_{{ ds_nodash }}_',
+                prefix='ingested/cloud_sql/sales_{{ ds_nodash }}_',
                 google_cloud_conn_id='google_cloud_default',
                 timeout = 15
             )
 
-            load_users = GoogleCloudStorageToBigQueryOperator(
-                task_id                             = "gcs_to_bq_example",
-                bucket                              = 'dev-ronny-datalake-raw',
-                source_objects                      = ['ingested/cloud_sql/users_*.csv'],
-                destination_project_dataset_table   ='raw_layer.stations',
+            load_sales = GoogleCloudStorageToBigQueryOperator(
+                task_id = "load_sales",
+                bucket = 'dev-ronny-datalake-raw',
+                source_objects = ['ingested/cloud_sql/sales_*.csv'],
+                destination_project_dataset_table   ='raw_layer.r_sales',
                 schema_fields=[
-                    {'name': 'station_id', 'type': 'STRING', 'mode': 'NULLABLE'},
-                    {'name': 'name', 'type': 'STRING', 'mode': 'NULLABLE'},
-                    {'name': 'region_id', 'type': 'STRING', 'mode': 'NULLABLE'},
-                    {'name': 'capacity', 'type': 'INTEGER', 'mode': 'NULLABLE'}
+                    {'name': 'transaction_id', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'customer_id', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'product_id', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'quantity', 'type': 'INTEGER', 'mode': 'NULLABLE'},
+                    {'name': 'price', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'category', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'date_time', 'type': 'STRING', 'mode': 'NULLABLE'},
                 ],
-                write_disposition='WRITE_TRUNCATE'
+                create_disposition = 'CREATE_IF_NEEDED',
+                write_disposition = 'WRITE_APPEND'
             )
 
-            users_ingested_sensor >> load_users
+            smart_cleaner_database_sql = BashOperator(
+                task_id = 'smart_cleaner_database_sql',
+                bash_command = """
+                    gsutil mv {{ params.path_users }} {{ params.target }}        
+                """,        
+                params = {
+                    'path_users': PATHS['users_csv'],
+                    'target': PATHS['loaded_cloud_sql']
+                }
+            )
 
-    start_datapipeline >> [api_local, api_global, database_sql]
+            sales_ingested_sensor >> load_sales >> smart_cleaner_database_sql
+        
+        ingest_from_database_sql >> load_raw_with_bq
+
+    start_loading_master = DummyOperator(
+        task_id = 'start_loading_master'
+    )
+
+    load_master = BigQueryOperator(
+        task_id = "load_master",
+        sql = QUERY_MASTER,
+        destination_dataset_table = 'master_layer.m_performance_model',
+        write_disposition = 'WRITE_APPEND',
+        create_disposition = 'CREATE_IF_NEEDED',
+        use_legacy_sql = False,
+        priority = 'BATCH'
+    )
+
+    start_loading_business = DummyOperator(
+        task_id = 'start_loading_business'
+    )
+
+    load_business_performance_metrics = BigQueryOperator(
+        task_id = "load_business_performance_metrics",
+        sql = QUERY_BUSINESS_PERFORMANCE_METRICS,
+        destination_dataset_table = 'business_layer.b_performance_metrics',
+        write_disposition = 'WRITE_APPEND',
+        create_disposition = 'CREATE_IF_NEEDED',
+        use_legacy_sql = False,
+        priority = 'BATCH'
+    )
+
+    load_business_product_performance = BigQueryOperator(
+        task_id = "load_business_product_performance",
+        sql = QUERY_BUSINESS_PRODUCT_PERFORMANCE,
+        destination_dataset_table = 'business_layer.product_performance',
+        write_disposition = 'WRITE_APPEND',
+        create_disposition = 'CREATE_IF_NEEDED',
+        use_legacy_sql = False,
+        priority = 'BATCH'
+    )
+
+    end_datapipeline = DummyOperator(
+        task_id = 'end_datapipeline'
+    )
+
+
+    
+    start_datapipeline >> [api_local, api_global, database_sql] >> start_loading_master >> load_master
+
+    load_master >> start_loading_business >> [load_business_performance_metrics, load_business_product_performance] >> end_datapipeline
 
