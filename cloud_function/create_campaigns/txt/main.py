@@ -17,7 +17,7 @@ def create_campaigns(request):
     uuid_4dig = str(uuid.uuid4().hex)[:4]
 
     bucket_name = 'dev-ronny-datalake-raw'
-    destination_blob_name = f'ingested/campaigns_{date_str}_{uuid_4dig}.txt'
+    destination_blob_name = f'ingested/txt/campaigns_{date_str}_{uuid_4dig}.txt'
 
     fake = Faker()
     lines = []
