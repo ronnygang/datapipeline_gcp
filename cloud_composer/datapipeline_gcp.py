@@ -12,12 +12,15 @@ from airflow.providers.google.cloud.operators.dataproc import (
     DataprocDeleteClusterOperator,
     DataprocSubmitJobOperator,
 )
+from airflow.contrib.operators.gcp_sql_operator import CloudSqlInstanceExportOperator
+
 from datetime import timedelta, datetime
 import logging
 import requests
 import random
 import uuid
 
+#API_GLOBAL
 FECHA_FORMATO = datetime.now().strftime("%Y%m%d")
 UUID_4DIG = str(uuid.uuid4().hex)[:4]
 PROJECT_ID = 'ronny-dev-airflow'
@@ -25,6 +28,11 @@ REGION = 'us-central1'
 CLUSTER_NAME = f'ephemeral-cluster-ronny-{FECHA_FORMATO}-{UUID_4DIG}'
 PYSPARK_URI = 'gs://dev-ronny-datalake-raw/scripts/transformaciones_pyspark.py'
 JAR_URI = "gs://dev-ronny-datalake-raw/scripts/spark-bigquery-with-dependencies_2.12-0.30.0.jar"
+
+#DATABASE_SQL
+INSTANCE_NAME = 'dev-ronny-sql'
+EXPORT_URI = f'gs://dev-ronny-datalake-raw/ingested/cloud_sql/stations_{FECHA_FORMATO}_{UUID_4DIG}.csv'
+SQL_QUERY = "SELECT * FROM ronny_dev.stations"
 
 DEFAULT_ARGS = {
     'owner': 'Ronny',
@@ -42,11 +50,13 @@ TASK_ARGUMENTS = {
 }
 
 PATHS = {
-    'campaigns_csv': 'gs://dev-ronny-datalake-raw/ingested/csv/campaigns_*.csv',
-    'transactions_csv': 'gs://dev-ronny-datalake-raw/ingested/csv/transactions_*.csv',
-    'campaigns_txt': 'gs://dev-ronny-datalake-raw/ingested/txt/campaigns_*.txt',
-    'transactions_txt': 'gs://dev-ronny-datalake-raw/ingested/txt/transactions_*.txt',
-    'loaded' : 'gs://dev-ronny-datalake-raw/loaded'
+    'campaigns_csv': 'gs://dev-ronny-datalake-raw/ingested/local/campaigns_*.csv',
+    'transactions_csv': 'gs://dev-ronny-datalake-raw/ingested/local/transactions_*.csv',
+    'campaigns_txt': 'gs://dev-ronny-datalake-raw/ingested/global/campaigns_*.txt',
+    'transactions_txt': 'gs://dev-ronny-datalake-raw/ingested/global/transactions_*.txt',
+    'loaded_local' : 'gs://dev-ronny-datalake-raw/loaded/local',
+    'loaded_global' : 'gs://dev-ronny-datalake-raw/loaded/global',
+    'loaded_cloud_sql' : 'gs://dev-ronny-datalake-raw/loaded/cloud_sql',
 }
 
 CLUSTER_CONFIG = {
@@ -67,6 +77,16 @@ PYSPARK_JOB = {
     "placement": {"cluster_name": CLUSTER_NAME},
     "pyspark_job": {"main_python_file_uri": PYSPARK_URI,
     "jar_file_uris":[JAR_URI]
+    }
+}
+
+EXPORT_BODY = {
+    "exportContext": {
+        "fileType": "csv",
+        "uri": EXPORT_URI,
+        "csvExportOptions":{
+            "selectQuery": SQL_QUERY
+        }
     }
 }
 
@@ -172,8 +192,8 @@ with DAG(
                 write_disposition = 'WRITE_APPEND'
             )
 
-            smart_cleaner = BashOperator(
-                task_id = 'smart_cleaner',
+            smart_cleaner_csv = BashOperator(
+                task_id = 'smart_cleaner_csv',
                 bash_command = """
                     gsutil mv {{ params.path_campaigns }} {{ params.target }} && 
                     gsutil mv {{ params.path_transactions }} {{ params.target }}         
@@ -187,7 +207,7 @@ with DAG(
 
             [campaigns_ingested_sensor, transactions_ingested_sensor] >> starting_loading_to_raw 
             
-            starting_loading_to_raw >> [load_campaign, load_transaction] >> smart_cleaner
+            starting_loading_to_raw >> [load_campaign, load_transaction] >> smart_cleaner_csv
         
         ingest_from_api_local >> load_raw_with_bq
 
@@ -235,7 +255,7 @@ with DAG(
             )
 
             pyspark_task = DataprocSubmitJobOperator(
-                task_id="data_pipeline_execution",
+                task_id="pyspark_task",
                 job=PYSPARK_JOB,
                 region=REGION,
                 project_id=PROJECT_ID
@@ -248,8 +268,8 @@ with DAG(
                 region=REGION
             )
 
-            smart_cleaner = BashOperator(
-                task_id = 'smart_cleaner',
+            smart_cleaner_txt = BashOperator(
+                task_id = 'smart_cleaner_txt',
                 bash_command = """
                     gsutil mv {{ params.path_campaigns }} {{ params.target }} && 
                     gsutil mv {{ params.path_transactions }} {{ params.target }}         
@@ -263,7 +283,44 @@ with DAG(
 
             [campaigns_ingested_sensor, transactions_ingested_sensor] >> create_cluster >> pyspark_task
 
-            pyspark_task >> delete_cluster >> smart_cleaner
+            pyspark_task >> delete_cluster >> smart_cleaner_txt
 
-    start_datapipeline >> [api_local, api_global]
+        ingest_from_api_global >> load_raw_with_spark
+
+    with TaskGroup('database_sql') as database_sql:
+        with TaskGroup('ingest_from_database_sql') as ingest_from_database_sql:
+            sql_export_task = CloudSqlInstanceExportOperator(
+                project_id=PROJECT_ID, 
+                body=EXPORT_BODY, 
+                instance=INSTANCE_NAME, 
+                task_id='sql_export_task'
+            )
+            sql_export_task
+
+        with TaskGroup('load_raw_with_bq') as load_raw_with_bq:
+            users_ingested_sensor = GCSObjectsWithPrefixExistenceSensor(
+                task_id='campaigns_ingested_sensor',
+                bucket='dev-ronny-datalake-raw',
+                prefix='ingested/cloud_sql/users_{{ ds_nodash }}_',
+                google_cloud_conn_id='google_cloud_default',
+                timeout = 15
+            )
+
+            load_users = GoogleCloudStorageToBigQueryOperator(
+                task_id                             = "gcs_to_bq_example",
+                bucket                              = 'dev-ronny-datalake-raw',
+                source_objects                      = ['ingested/cloud_sql/users_*.csv'],
+                destination_project_dataset_table   ='raw_layer.stations',
+                schema_fields=[
+                    {'name': 'station_id', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'name', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'region_id', 'type': 'STRING', 'mode': 'NULLABLE'},
+                    {'name': 'capacity', 'type': 'INTEGER', 'mode': 'NULLABLE'}
+                ],
+                write_disposition='WRITE_TRUNCATE'
+            )
+
+            users_ingested_sensor >> load_users
+
+    start_datapipeline >> [api_local, api_global, database_sql]
 
