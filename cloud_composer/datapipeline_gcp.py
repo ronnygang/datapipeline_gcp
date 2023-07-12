@@ -28,7 +28,7 @@ PROJECT_ID = 'ronny-dev-airflow'
 REGION = 'us-central1'
 CLUSTER_NAME = f'ephemeral-cluster-ronny-{FECHA_FORMATO}-{UUID_4DIG}'
 PYSPARK_URI = 'gs://dev-ronny-datalake-raw/scripts/transformaciones_pyspark.py'
-JAR_URI = "gs://dev-ronny-datalake-raw/scripts/spark-bigquery-with-dependencies_2.12-0.30.0.jar"
+JAR_URI = 'gs://dev-ronny-datalake-raw/scripts/spark-bigquery-with-dependencies_2.12-0.30.0.jar'
 
 #DATABASE_SQL
 INSTANCE_NAME = 'dev-ronny-sql'
